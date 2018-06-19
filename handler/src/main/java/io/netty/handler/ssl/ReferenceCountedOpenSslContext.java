@@ -486,6 +486,12 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
 
                 SSLContext.free(ctx);
                 ctx = 0;
+                OpenSslKeyMaterialManager manager = keyMaterialManager();
+                if (manager != null) {
+                    // Ensure we destroy the provider that is used by the manager as well (in case it caches the
+                    // key material.
+                    manager.provider.destroy();
+                }
             }
         } finally {
             writerLock.unlock();
@@ -509,7 +515,7 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
         throw new IllegalStateException("no X509TrustManager found");
     }
 
-    protected static X509KeyManager chooseX509KeyManager(KeyManager[] kms) {
+    static X509KeyManager chooseX509KeyManager(KeyManager[] kms) {
         for (KeyManager km : kms) {
             if (km instanceof X509KeyManager) {
                 return (X509KeyManager) km;
@@ -564,10 +570,6 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
 
     static boolean useExtendedTrustManager(X509TrustManager trustManager) {
         return PlatformDependent.javaVersion() >= 7 && trustManager instanceof X509ExtendedTrustManager;
-    }
-
-    static boolean useExtendedKeyManager(X509KeyManager keyManager) {
-        return PlatformDependent.javaVersion() >= 7 && keyManager instanceof X509ExtendedKeyManager;
     }
 
     @Override

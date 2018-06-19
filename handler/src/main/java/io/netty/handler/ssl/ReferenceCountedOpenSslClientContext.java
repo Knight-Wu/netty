@@ -31,7 +31,6 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.TrustManagerFactory;
-import javax.net.ssl.X509ExtendedKeyManager;
 import javax.net.ssl.X509ExtendedTrustManager;
 import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
@@ -100,18 +99,23 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
                     setKeyMaterial(ctx, keyCertChain, key, keyPassword);
                 }
             } else {
+                OpenSslKeyMaterialProvider keyMaterialProvider = null;
+
                 // javadocs state that keyManagerFactory has precedent over keyCertChain
                 if (keyManagerFactory == null && keyCertChain != null) {
-                    keyManagerFactory = buildKeyManagerFactory(
-                            keyCertChain, key, keyPassword, keyManagerFactory);
+                    keyMaterialProvider = new OpenSslStaticX509KeyManagerFactory(buildKeyManagerFactory(
+                            keyCertChain, key, keyPassword, null), keyPassword).provider();
+                } else if (keyManagerFactory != null) {
+                    if (keyManagerFactory instanceof OpenSslStaticX509KeyManagerFactory) {
+                        keyMaterialProvider = ((OpenSslStaticX509KeyManagerFactory) keyManagerFactory).provider();
+                    } else {
+                        X509KeyManager keyManager = chooseX509KeyManager(keyManagerFactory.getKeyManagers());
+                        keyMaterialProvider = new OpenSslKeyMaterialProvider(keyManager, keyPassword);
+                    }
                 }
 
-                if (keyManagerFactory != null) {
-                    X509KeyManager keyManager = chooseX509KeyManager(keyManagerFactory.getKeyManagers());
-                    OpenSslKeyMaterialManager materialManager = useExtendedKeyManager(keyManager) ?
-                            new OpenSslExtendedKeyMaterialManager(
-                                    (X509ExtendedKeyManager) keyManager, keyPassword) :
-                            new OpenSslKeyMaterialManager(keyManager, keyPassword);
+                if (keyMaterialProvider != null) {
+                    OpenSslKeyMaterialManager materialManager = new OpenSslKeyMaterialManager(keyMaterialProvider);
                     SSLContext.setCertRequestedCallback(ctx, new OpenSslCertificateRequestedCallback(
                             engineMap, materialManager));
                 }
@@ -232,7 +236,8 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
         }
 
         @Override
-        public KeyMaterial requested(long ssl, byte[] keyTypeBytes, byte[][] asn1DerEncodedPrincipals) {
+        public void requested(
+                long ssl, long certOut, long keyOut, byte[] keyTypeBytes, byte[][] asn1DerEncodedPrincipals) {
             final ReferenceCountedOpenSslEngine engine = engineMap.get(ssl);
             try {
                 final Set<String> keyTypesSet = supportedClientKeyTypes(keyTypeBytes);
@@ -246,13 +251,12 @@ public final class ReferenceCountedOpenSslClientContext extends ReferenceCounted
                         issuers[i] = new X500Principal(asn1DerEncodedPrincipals[i]);
                     }
                 }
-                return keyManagerHolder.keyMaterial(engine, keyTypes, issuers);
+                keyManagerHolder.setkeyMaterial(engine, certOut, keyOut, keyTypes, issuers);
             } catch (Throwable cause) {
                 logger.debug("request of key failed", cause);
                 SSLHandshakeException e = new SSLHandshakeException("General OpenSslEngine problem");
                 e.initCause(cause);
                 engine.handshakeException = e;
-                return null;
             }
         }
 
